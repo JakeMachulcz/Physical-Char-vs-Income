@@ -1,0 +1,859 @@
+---
+title: "Final Project | Part B"
+author: "Evan DeWitt, Natasha Malik, Jake Machulcz"
+format: 
+   html:
+     df-print: paged
+     embed-resources: true
+editor: visual
+---
+
+```{r, message=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(scales)
+
+```
+
+## Introduction
+
+In this document, we will be examining data from the National Longitudal Survey of Youth of 1979 (NLSY79). This was a study conducted to follow a sample of Americans born between 1957 and 1964. The data we received contained survey results of income, education, and physical characteristics. We will be exploring race, height, and eye color in 1982 and 2012, and compare how they affected income.
+
+## Surveying the Data
+
+#### Loading in the data
+
+```{r}
+load("education_data_nlsy79.RData")
+load("income_data_nlsy79.RData")
+load("physical_data_nlsy79.RData")
+```
+
+#### Examining the data
+
+```{r}
+glimpse(education_data_nlsy79)
+glimpse(income_data_nlsy79)
+glimpse(physical_data_nlsy79)
+```
+
+The education data focuses on the number of years of education each respondent completed as of May 1st of each survey year. The income data focuses on the annual income of each respondent for each year surveyed. The physical data contains a number of physical characteristics of each respondent such as height, weight, hair color, eye color, and sex. Note that the `CASEID` column is the unique identifier for each respondent.
+
+## Joining the Data
+
+All three raw data sets contain `year` and `CASEID` columns, with the education and income data sets both containing only one additional column. In order to determine the optimal year(s) to examine, we will observe which years contain the most data points for our target variables.
+
+First, we will join the three data sets into a master set of data.
+
+```{r}
+master_data_raw <- inner_join(income_data_nlsy79, education_data_nlsy79, by = c("CASEID", "year")) %>%
+  inner_join(physical_data_nlsy79, by = c("CASEID", "year"))
+glimpse(master_data_raw)
+```
+
+## Scope of Analysis
+
+For our analysis we will examine the effects of `race`, `height`, and `eyes` (eye color) as they relate to income. We will add a column to our master data set to count the number of non-NA values in these target categories.
+
+```{r}
+
+master_data_raw %>%
+  mutate(total_data_points = rowSums(!is.na(across(c(race, height, eyes, sex, education)))))
+
+```
+
+Now, sort this by total data points by year.
+
+```{r}
+
+master_data_raw %>%
+  mutate(total_data_points = rowSums(!is.na(across(c(race, height, eyes, sex, education))))) %>%
+  group_by(year) %>%
+  summarise(sum_data_points = sum(total_data_points)) %>%
+  arrange(desc(sum_data_points))
+
+```
+
+Two of the four most data-saturated years are 1982 (the first year income data was recorded) and 2012. Pairing these together would allow us to conduct a round 30-year comparison. In summary, we will examine the effects of race, height, and eye color on income and compare this between the years 1982 and 2012.
+
+#### A note on `income`
+
+During the collection of this data, the income was truncated as to not overtly affect analysis. So, the highest 2% of incomes for each year have been set to the minimum of that 2%. For example, the top 2% of incomes in 1982 were all set to \$28,975.
+
+```{r}
+master_data_raw %>%
+  filter(year == 1982, !is.na(income)) %>%
+  arrange(desc(income))
+```
+
+## Income
+
+Let's examine incomes in our target years.
+
+```{r}
+
+master_data_raw %>%
+  filter(year %in% c(1982, 2012), !is.na(income)) %>%
+  ggplot(aes(x = income)) +
+  geom_histogram(binwidth = 10000) +
+  facet_wrap(~year) +
+  scale_x_continuous(
+    breaks = seq(0, 300000, by = 50000),   
+    labels = label_number(scale = 1e-3, suffix = "K"))                       
+  
+
+```
+
+We can see that there are distant outliers that can vastly skew our data (\~\$340,000), as well as modes at \$0. It is highly unlikely that the majority of respondents had no income. Also, the youngest possible age of respondents in 1982 is 18, so they may still be dependents, in school, or have other reasons for having no income. For our purposes, we will only use data in which the respondents have an income, and we will filter out distant outliers and NA values. We will also look only at responses provided for our target years.
+
+```{r}
+target_years_clean_income <- master_data_raw %>%
+  filter(year %in% c(1982, 2012), !is.na(income)) %>%
+  group_by(year) %>%
+  filter(income != max(income, na.rm = TRUE) & income > 0) %>%
+  ungroup()
+```
+
+Now, let's examine the incomes in our target years with the clean data.
+
+```{r}
+target_years_clean_income %>%
+  filter(year == 1982) %>%
+  ggplot(aes(x = income)) +
+  geom_histogram(binwidth = 1000) +
+  scale_x_continuous(
+    breaks = seq(0, 50000, by = 5000),   
+    labels = label_number(scale_cut = cut_short_scale())) +
+  ggtitle("Incomes in 1982") 
+```
+
+```{r}
+target_years_clean_income %>%
+  filter(year == 2012) %>%
+  ggplot(aes(x = income)) +
+  geom_histogram(binwidth = 10000) +
+  scale_x_continuous(
+    breaks = seq(0, 200000, by = 25000),   
+    labels = label_number(scale_cut = cut_short_scale())) +
+  ggtitle("Incomes in 2012")
+```
+
+```{r}
+target_years_clean_income %>%
+  group_by(year) %>%
+  summarise(mean_income = round(mean(income), 0),
+            median_income = median(income))
+```
+
+We can see that after cleaning the data, both years show the general pattern for a Poisson distribution. The median income in 1982 was \$4,500, which is considerably less than the median income in 2012, which was \$40,000. Likewise, the mean income in 1982 (\$5,797) is substantially less than the mean income in 2012 (\$46,719).
+
+## Height vs. Income
+
+Let's first examine the `height` variable itself in 1982 and 2012.
+
+```{r}
+target_years_clean_income %>%
+  filter(!is.na(height)) %>%
+  ggplot(aes(x = height)) +
+  geom_boxplot() +
+  facet_wrap(~year) +
+  labs(title = "Heights by Year")
+```
+
+Since the heights of men and women generally differ in their distributions, let's break down this down by sex.
+
+```{r}
+target_years_clean_income %>%
+  filter(!is.na(height)) %>%
+  ggplot(aes(x = height)) +
+  geom_boxplot() +
+  facet_grid(year ~ sex) +
+  labs(title = "Heights by Sex & Year")
+```
+
+```{r}
+target_years_clean_income %>%
+  filter(!is.na(height)) %>%
+  group_by(sex) %>%
+  summarise(min_height = min(height),
+            max_height = max(height))
+```
+
+In this data, the heights of women have more variability than the heights of men. Women have heights ranging from 48" to 91", while men's heights range from 57" to 83". While it is not common for humans to have heights of 48" and 91", it has occurred and is still possible. For that reason, we will keep them in our analysis.
+
+#### Study of height vs. income in 1982
+
+```{r}
+target_years_clean_income %>%
+  filter(year == 1982, !is.na(height)) %>%
+  ggplot(aes(x = height, y = income)) +
+  geom_point() +
+  facet_wrap(~sex) +
+  labs(title = "Income vs. Height (1982)",
+       x = "Height",
+       y = "Income")
+```
+
+```{r}
+# Examine the average income by height and sex
+target_years_clean_income %>%
+  filter(year == 1982, !is.na(height), !is.na(income)) %>%
+  group_by(sex, height) %>%
+  summarise(avg_income = mean(income, na.rm = TRUE), 
+            count = n()) %>%
+  # Only use instances where there are at least 3 observations
+  filter(count >= 3) %>%
+  ungroup() %>%
+  ggplot(aes(x = height, y = avg_income, fill = sex)) +
+  geom_col(position = "dodge")+
+  labs(title = "Average Income by Height (1982)",
+       x = "Height",
+       y = "Avg. Income",
+       fill = "Sex")
+```
+
+```{r}
+# Examine the average income JUST by height
+target_years_clean_income %>%
+  filter(year == 1982, !is.na(height), !is.na(income)) %>%
+  group_by(height) %>%
+  summarise(avg_income = mean(income, na.rm = TRUE), 
+            count = n()) %>%
+  # Only use instances where there are at least 3 observations
+  filter(count >= 3) %>%
+  ungroup() %>%
+  ggplot(aes(x = height, y = avg_income)) +
+  geom_col(position = "dodge")+
+  labs(title = "Average Income by Height (1982)",
+       x = "Height",
+       y = "Avg. Income")
+```
+
+```{r}
+# Determine the correlation coefficient for 1982
+target_years_clean_income %>%
+  filter(year == 1982, !is.na(height)) %>%
+  summarise(cor_coef = cor(height, income))
+```
+
+Looking at the plots, there appears to be a very slight positive correlation between height and income in 1982. This is more commonly demonstrated in men than in women, and it is supported by a correlation coefficient of 0.117.
+
+#### Study of height vs. income in 2012
+
+```{r}
+target_years_clean_income %>%
+  filter(year == 2012, !is.na(height)) %>%
+  ggplot(aes(x = height, y = income)) +
+  geom_point() +
+  facet_wrap(~sex) +
+  labs(title = "Income vs. Height (2012)",
+       x = "Height",
+       y = "Income")
+```
+
+```{r}
+# Examine the average income by height and sex
+target_years_clean_income %>%
+  filter(year == 2012, !is.na(height), !is.na(income)) %>%
+  group_by(sex, height) %>%
+  summarise(avg_income = mean(income, na.rm = TRUE), 
+            count = n()) %>%
+  # Only use instances where there are at least 3 observations
+  filter(count >= 3) %>%
+  ungroup() %>%
+  ggplot(aes(x = height, y = avg_income, fill = sex)) +
+  geom_col(position = "dodge")+
+  labs(title = "Average Income by Height (2012)",
+       x = "Height",
+       y = "Avg. Income",
+       fill = "Sex")
+```
+
+```{r}
+# Examine the average income JUST by height
+target_years_clean_income %>%
+  filter(year == 2012, !is.na(height), !is.na(income)) %>%
+  group_by(height) %>%
+  summarise(avg_income = mean(income, na.rm = TRUE), 
+            count = n()) %>%
+  # Only use instances where there are at least 3 observations
+  filter(count >= 3) %>%
+  ungroup() %>%
+  ggplot(aes(x = height, y = avg_income)) +
+  geom_col(position = "dodge")+
+  labs(title = "Average Income by Height (2012)",
+       x = "Height",
+       y = "Avg. Income")
+```
+
+```{r}
+# Determine the correlation coefficient for 2012
+target_years_clean_income %>%
+  filter(year == 2012, !is.na(height)) %>%
+  summarise(cor_coef = cor(height, income))
+```
+
+There appears to be a similar positive correlation between height and income in 2012, albeit slightly more apparent. It can be seen in the observations of both men *and* women, and the correlation coefficient is almost double that of 1982's at 0.220.
+
+#### Summary of height vs. income (30-year comparison)
+
+Overall, height has seemingly become more of a factor in income in 2012 than it was in 1982. In 1982, the majority of the correlation was demonstrated by men, but in 2012 it was apparent in both men *and* women, which led to a stronger correlation overall. Looking at the correlation coefficients, 2012's was almost double that of 1982's, which further supports our findings.
+
+## Race vs. Income
+
+#### Race Attributes
+
+Before conducting the impact race has on salary, we must first inspect the 'race' variable in and of itself.
+
+```{r}
+table(target_years_clean_income$race)
+```
+
+We can see from the output of the above table, our 'race' variable is composed of 3 fields:
+
+1.  Black
+2.  Hispanic
+3.  NBNH: Non-black and non-hispanic
+
+This analysis will be restricted to these three fields. This is important to note because our 'NBNH' field is composed of multiple races, so no definitive claims can be made about a specific race outside of Black and Hispanic Americans.\
+\
+First - let's examine how many rows of available data we have for each of these 'races' in both 1982 and 2012. An underrepresented group might skew results, so it is important to check that we have a suitable amount of data to infer any meaningful information.
+
+```{r}
+# Count the number of rows for each race in both 1982 and 2012
+race_counts <- target_years_clean_income %>%
+  filter(year %in% c(1982, 2012), !is.na(race)) %>%
+  group_by(year, race) %>%
+  summarise(count = n()) %>%
+  pivot_wider(names_from = year, values_from = count, values_fill = list(count = 0)) %>%
+  rename(`1982` = `1982`, `2012` = `2012`)
+
+# Display the table
+race_counts
+
+```
+
+As we can see, we have a decent amount of information for all races in both years, with 1982 having the most information to analyze.
+
+Now that we have ensured adequate data, we can move onto our actual analysis:\
+
+#### Study of race vs. Income (1982)
+
+\
+This analysis on race and its impact/non-impact on salary will be conducted from the point of view of a given subgroup. We will conduct three separate tables, one for each race, so that can obtain data points that are *relative* to all **other** groups.\
+\
+In other words - we are trying to see how EQUITABLE our salaries are distributed amongst the different races. How much more/(less) do \_\_\_ Americans earn compared to all other groups?\
+
+```{r}
+
+compare_group_to_others1982 <- function(data, race_filter) {
+  # specific race
+  race_stats <- data %>%
+    filter(!is.na(income), year == 1982, race == race_filter) %>%
+    summarise(
+      race = race_filter,
+      mean_income = mean(income, na.rm = TRUE),
+      median_income = median(income, na.rm = TRUE),
+      max_income = max(income, na.rm = TRUE),
+      min_income = min(income, na.rm = TRUE)
+    )
+  
+
+  others_stats <- data %>%
+    filter(!is.na(income), year == 1982, race != race_filter) %>%
+    summarise(
+      mean_income = mean(income, na.rm = TRUE),
+      median_income = median(income, na.rm = TRUE),
+      max_income = max(income, na.rm = TRUE),
+      min_income = min(income, na.rm = TRUE)
+    )
+  
+
+  comparison <- race_stats %>%
+    mutate(
+      mean_diff_pct = (mean_income - others_stats$mean_income) / others_stats$mean_income * 100,
+      median_diff_pct = (median_income - others_stats$median_income) / others_stats$median_income * 100,
+      max_diff_pct = (max_income - others_stats$max_income) / others_stats$max_income * 100,
+      min_diff_pct = (min_income - others_stats$min_income) / others_stats$min_income * 100
+    )
+  
+  return(comparison)
+}
+
+black_comparison <- compare_group_to_others1982(target_years_clean_income, "black")
+hispanic_comparison <- compare_group_to_others1982(target_years_clean_income, "hispanic")
+nbnh_comparison <- compare_group_to_others1982(target_years_clean_income, "NBNH")
+
+comparison_table1982 <- bind_rows(black_comparison, hispanic_comparison, nbnh_comparison)
+
+comparison_table1982
+
+```
+
+-   White Americans (NBNH) had a median income of \$5,000 in 1982, which was 25% higher than the median income of other groups. Their average income was \$6,083, 14.41% higher than the average of other groups.
+
+<!-- -->
+
+-   Hispanic Americans had a median income of \$5,000 in 1982, which was 14.92% higher than the median income of other groups. Their average income was \$5,995, 4.06% higher than the average of other groups.
+
+-   Black Americans had a median income of \$3,000 in 1982, which was 40% lower than the median income of other groups. Their average income was \$4,838, 20.24% lower than the average of other groups.
+
+#### Study of race vs. Income (2012)
+
+```{r}
+
+compare_group_to_others2012 <- function(data, race_filter) {
+  # specific race table
+  race_stats <- data %>%
+    filter(!is.na(income), year == 2012, race == race_filter) %>%
+    summarise(
+      race = race_filter,
+      mean_income = mean(income, na.rm = TRUE),
+      median_income = median(income, na.rm = TRUE),
+      max_income = max(income, na.rm = TRUE),
+      min_income = min(income, na.rm = TRUE)
+    )
+  
+  # all others
+  others_stats <- data %>%
+    filter(!is.na(income), year == 2012, race != race_filter) %>%
+    summarise(
+      mean_income = mean(income, na.rm = TRUE),
+      median_income = median(income, na.rm = TRUE),
+      max_income = max(income, na.rm = TRUE),
+      min_income = min(income, na.rm = TRUE)
+    )
+  
+  comparison <- race_stats %>%
+    mutate(
+      mean_diff_pct = (mean_income - others_stats$mean_income) / others_stats$mean_income * 100,
+      median_diff_pct = (median_income - others_stats$median_income) / others_stats$median_income * 100,
+      max_diff_pct = (max_income - others_stats$max_income) / others_stats$max_income * 100,
+      min_diff_pct = (min_income - others_stats$min_income) / others_stats$min_income * 100
+    )
+  
+  return(comparison)
+}
+
+black_comparison <- compare_group_to_others2012(target_years_clean_income, "black")
+hispanic_comparison <- compare_group_to_others2012(target_years_clean_income, "hispanic")
+nbnh_comparison <- compare_group_to_others2012(target_years_clean_income, "NBNH")
+
+comparison_table2012 <- bind_rows(black_comparison, hispanic_comparison, nbnh_comparison)
+
+comparison_table2012
+
+```
+
+-   White Americans (NBNH) had a median income of \$44,000 in 2012, which was 25.71% higher than the median income of other groups. Their average income was \$51,455, 24.13% higher than the average of other groups.
+
+-   Hispanic Americans had a median income of \$40,000 in 2012, which was equal to the median income of other groups (0% difference). Their average income was \$44,739, 5.17% lower than the average of other groups.
+
+-   Black Americans had a median income of \$32,750 in 2012, which was 22.02% lower than the median income of other groups. Their average income was \$39,285, 20.93% lower than the average of other groups.
+
+#### Summary of race vs. Income (1982 vs 2012)
+
+It is clear from our data that:
+
+-   Non-Black and Non-Hispanics consistently earn more than their counterparts - both in 1982 and 2012. This inequality has shrunk since 1982 but still persists in 2012.
+
+<!-- -->
+
+-   Hispanic Americans experienced a shrinking inequality gap over the 30 year time period - although that shrinking gap came in the form of Hispanic Americans earning comparatively less on the median basis in 2012 than they were earning in 1982.
+
+-   Black Americans suffer the most income inequality - experiencing a comparatively lower income in both time periods and for both average and median calculations. Although the gap still exists - it has marginally shrunk over the 30 year time period - with Black Americans earning 40% less than their peers in 1982 and 22% in 2012.
+
+## Eye color vs. Income
+
+**Eye Color Attribute**
+
+As per previous characteristics, let's take a look at the data currently available for the variable "eye color:"
+
+```{r}
+
+table(target_years_clean_income$eyes)
+
+```
+
+As one would expect, black (very dark brown), brown, and light brown comprise the majority of results as brown eyes are a dominant physical trait. Let's visualize the distribution of eye colors in a histogram:
+
+```{r}
+
+eyes_no_nas <- target_years_clean_income %>%
+  filter(!is.na(eyes))
+
+ggplot(eyes_no_nas, aes(x = factor(eyes, levels = c("brown", "blue", "green", "hazel", "black", "light brown", "light blue", "grey", "other")))) +
+  geom_bar() +
+  labs(
+    title = "Count of Eye Color",
+    x = "Eye Color",
+    y = "Count"
+  ) +
+  theme_minimal()
+
+```
+
+The categorization makes easy comparisons difficult - since there are technically three categories of "brown" eyes and "blue" eyes each (brown, light brown, black & blue, light blue, and grey). We will thus be combining these sets of three categories into super-categories "brown" and "blue":
+
+```{r}
+
+simplified_eyes <- eyes_no_nas %>%
+  mutate(simple_eyes = str_replace(eyes, "light brown", "brown"),
+         simple_eyes = str_replace(simple_eyes, "black", "brown"),
+         simple_eyes = str_replace(simple_eyes, "light blue", "blue"),
+         simple_eyes = str_replace(simple_eyes, "grey", "blue"),
+         )
+
+table(simplified_eyes$simple_eyes)
+
+```
+
+Now we only have five colored categories and one "other" to work with. "Other" will probably be meaningless since its frequency is so low, but "other" might encompass rarer or atypical eye colors that accompany some congenital conditions such as albinism. Since it probably won't skew the data much, we decided to leave it in.
+
+Now that we've simplified the data into fewer categories, we can proceed with the analysis comparing eye color to income.
+
+#### Study of eye color vs. income in 1982
+
+```{r}
+
+eyes_comparison_1982 <- function(data, eye_color) {
+  eye_color_stats <- data %>%
+    filter(!is.na(income), year == 1982, simple_eyes == eye_color) %>%
+    summarise(
+      simple_eyes = eye_color,
+      mean_income = mean(income, na.rm = TRUE),
+      median_income = median(income, na.rm = TRUE),
+      max_income = max(income, na.rm = TRUE),
+      min_income = min(income, na.rm = TRUE)
+    )
+  
+
+  eyes_baseline <- data %>%
+    filter(!is.na(income), year == 1982, simple_eyes != eye_color) %>%
+    summarise(
+      mean_income = mean(income, na.rm = TRUE),
+      median_income = median(income, na.rm = TRUE),
+      max_income = max(income, na.rm = TRUE),
+      min_income = min(income, na.rm = TRUE)
+    )
+  
+
+comparison <- eye_color_stats %>%
+    mutate(
+      mean_diff_pct = (mean_income - eyes_baseline$mean_income) / eyes_baseline$mean_income * 100,
+      median_diff_pct = (median_income - eyes_baseline$median_income) / eyes_baseline$median_income * 100,
+      max_diff_pct = (max_income - eyes_baseline$max_income) / eyes_baseline$max_income * 100,
+      min_diff_pct = (min_income - eyes_baseline$min_income) / eyes_baseline$min_income * 100
+    )
+  
+  return(comparison)
+}
+
+brown_comparison1982 <- eyes_comparison_1982(simplified_eyes, "brown")
+blue_comparison1982 <- eyes_comparison_1982(simplified_eyes, "blue")
+hazel_comparison1982 <- eyes_comparison_1982(simplified_eyes, "hazel")
+green_comparison1982 <- eyes_comparison_1982(simplified_eyes, "green")
+other_comparison1982 <- eyes_comparison_1982(simplified_eyes, "other")
+
+eye_comparison_table1982 <- bind_rows(brown_comparison1982, blue_comparison1982, hazel_comparison1982, green_comparison1982, other_comparison1982)
+
+eye_comparison_table1982
+
+
+```
+
+With this table, we can see the eye color with the highest median income at \$5,062 is hazel - which when compared to the median of all other eye colors, is approximately 21% higher. The eye color with the greatest negative median differential and lowest median income is "other" at \$3,200, representing -26% from the median of all other eye colors. Excluding "other" due to its low frequency count, the second-lowest result is brown colored eyes, with a median of \$4,000, or -20% vs the median of all other eye colors.
+
+Are these results statistically significant? Since we're looking at categorical data vs continuous numerical variables, we have to use an analysis of variance or ANOVA test to examine the relationship between eye color versus difference in income:
+
+```{r}
+
+simplified_eyes_1982 <- filter(simplified_eyes, year == 1982)
+
+aov_results_1982 <- aov(income ~ simple_eyes, data = simplified_eyes_1982)
+summary(aov_results_1982)
+
+```
+
+The result for the year 1982 yields an F value of greater than 6 with a P value that is exceedingly smaller than 0.05 - indicating that the ratio of variance in income explained by eye color is six times greater than that not explained by the model, and that this relationship is statistically significant at a test of P \< 0.05. The p value here is close to 0, indicating the probability of this F value occurring given that the null hypothesis (no relationship between eye color and income) is true.
+
+In other words, there appears to be a real relationship between eye color and income in the year 1982.
+
+#### Study of eye color vs. income in 2012
+
+```{r}
+
+
+eyes_comparison_2012 <- function(data, eye_color) {
+  eye_color_stats <- data %>%
+    filter(!is.na(income), year == 2012, simple_eyes == eye_color) %>%
+    summarise(
+      simple_eyes = eye_color,
+      mean_income = mean(income, na.rm = TRUE),
+      median_income = median(income, na.rm = TRUE),
+      max_income = max(income, na.rm = TRUE),
+      min_income = min(income, na.rm = TRUE)
+    )
+  
+
+  eyes_baseline <- data %>%
+    filter(!is.na(income), year == 2012, simple_eyes != eye_color) %>%
+    summarise(
+      mean_income = mean(income, na.rm = TRUE),
+      median_income = median(income, na.rm = TRUE),
+      max_income = max(income, na.rm = TRUE),
+      min_income = min(income, na.rm = TRUE)
+    )
+  
+
+comparison <- eye_color_stats %>%
+    mutate(
+      mean_diff_pct = (mean_income - eyes_baseline$mean_income) / eyes_baseline$mean_income * 100,
+      median_diff_pct = (median_income - eyes_baseline$median_income) / eyes_baseline$median_income * 100,
+      max_diff_pct = (max_income - eyes_baseline$max_income) / eyes_baseline$max_income * 100,
+      min_diff_pct = (min_income - eyes_baseline$min_income) / eyes_baseline$min_income * 100
+    )
+  
+  return(comparison)
+}
+
+brown_comparison2012 <- eyes_comparison_2012(simplified_eyes, "brown")
+blue_comparison2012 <- eyes_comparison_2012(simplified_eyes, "blue")
+hazel_comparison2012 <- eyes_comparison_2012(simplified_eyes, "hazel")
+green_comparison2012 <- eyes_comparison_2012(simplified_eyes, "green")
+other_comparison2012 <- eyes_comparison_2012(simplified_eyes, "other")
+
+eye_comparison_table2012 <- bind_rows(brown_comparison2012, blue_comparison2012, hazel_comparison2012, green_comparison2012, other_comparison2012)
+
+eye_comparison_table2012
+
+
+```
+
+Now for the year 2012, we see that the highest earning group appears to be the "other" category at a median income of \$51,250, representing a value +28% compared the the population median. Excluding other (given the low frequency potentially skewing results), the second highest-earning group had blue eyes at a median income of \$45,263, representing a result +17% greater than the population median. Surprisingly, the hazel dominance did not persist across the thirty year gap - although it remains the second-highest earning category. Brown eyes faced the largest penalty to income with a median income of \$38,000, representing -14% vs the population median.
+
+Let's test the ANOVA for eye color vs income in 2012:
+
+```{r}
+
+simplified_eyes_2012 <- filter(simplified_eyes, year == 2012)
+
+aov_results_2012 <- aov(income ~ simple_eyes, data = simplified_eyes_2012)
+summary(aov_results_2012)
+
+```
+
+The results in 2012 point to an even greater relationship between eye color and income in 2012, with the ratio of variance being explained by eye color nearly 17 times greater than the amount explained by the residuals. The p value is even smaller than in 1982, suggesting not only a greater relationship between the two variables, but also a lesser likelihood that this result would occur given that the null hypothesis is true (no relationship between eye color and income).
+
+#### Confounding Variables
+
+Since eye color and race are inextricably related, a lot of this variability in income due to eye color could merely be a function of race. We can examine the ratio of eye colors by race:
+
+```{r}
+
+simplified_eyes_no_nas <- simplified_eyes %>%
+  filter(!is.na(simple_eyes)) %>%
+  count(simple_eyes, race)
+
+
+ggplot(simplified_eyes_no_nas, aes(x = factor(simple_eyes, levels = c("brown", "blue", "green", "hazel", "other")), y = n, color = race)) +
+  geom_point() +
+  labs(
+    title = "Count of Eye Color by Race",
+    x = "Eye Color",
+    y = "Count"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+
+eye_race_counts <- simplified_eyes %>%
+  filter(!is.na(simple_eyes), !is.na(race)) %>%  
+  group_by(simple_eyes, race) %>%
+  summarise(count = n()) %>%
+  ungroup()
+
+eye_race_percent <- eye_race_counts %>%
+  group_by(race) %>%
+  mutate(percent = (count / sum(count)) * 100) %>%  
+  ungroup()
+
+NBNH_eyes <- eye_race_percent %>%
+  filter(race == "NBNH")
+
+black_eyes <- eye_race_percent %>%
+  filter(race == "black")
+
+hispanic_eyes <- eye_race_percent %>%
+  filter(race == "hispanic")
+
+ggplot(eye_race_percent, aes(x = simple_eyes, y = percent, fill = simple_eyes)) +
+  geom_bar(stat = "identity") + 
+  labs(
+    title = "Percent Distribution of Eye Colors by Race",
+    x = "Eye Color",
+    y = "Percent"
+  ) +
+  theme_minimal() +
+  facet_wrap(~ race) +
+  scale_y_continuous(labels = scales::percent_format(scale = 1))
+```
+
+As seen above, the overwhelming likelihood of having brown eyes given that the person in question is either black or hispanic indicates that when examining eye color's impact on income, one is probably indirectly measuring the impact of race on income. Perhaps an analysis of eye color on income should only be constrained to the race "NBNH" since the distribution of eye colors is more even and examining a singular race should remove race as a confounding variable.
+
+#### Eye Color vs Income - Only for NBNH Population
+
+1982:
+
+```{r}
+
+NBNH_eye_color <- simplified_eyes %>%
+  filter(race == "NBNH")
+
+
+NBNH_eyes_comparison_1982 <- function(data, eye_color) {
+  NBNH_eye_color_stats <- data %>%
+    filter(!is.na(income), year == 1982, simple_eyes == eye_color) %>%
+    summarise(
+      simple_eyes = eye_color,
+      mean_income = mean(income, na.rm = TRUE),
+      median_income = median(income, na.rm = TRUE),
+      max_income = max(income, na.rm = TRUE),
+      min_income = min(income, na.rm = TRUE)
+    )
+  
+
+  NBNH_eyes_baseline <- data %>%
+    filter(!is.na(income), year == 1982, simple_eyes != eye_color) %>%
+    summarise(
+      mean_income = mean(income, na.rm = TRUE),
+      median_income = median(income, na.rm = TRUE),
+      max_income = max(income, na.rm = TRUE),
+      min_income = min(income, na.rm = TRUE)
+    )
+  
+
+comparison <- NBNH_eye_color_stats %>%
+    mutate(
+      mean_diff_pct = (mean_income - NBNH_eyes_baseline$mean_income) / NBNH_eyes_baseline$mean_income * 100,
+      median_diff_pct = (median_income - NBNH_eyes_baseline$median_income) / NBNH_eyes_baseline$median_income * 100,
+      max_diff_pct = (max_income - NBNH_eyes_baseline$max_income) / NBNH_eyes_baseline$max_income * 100,
+      min_diff_pct = (min_income - NBNH_eyes_baseline$min_income) / NBNH_eyes_baseline$min_income * 100
+    )
+  
+  return(comparison)
+}
+
+NBNH_brown_comparison1982 <- NBNH_eyes_comparison_1982(NBNH_eye_color, "brown")
+NBNH_blue_comparison1982 <- NBNH_eyes_comparison_1982(NBNH_eye_color, "blue")
+NBNH_hazel_comparison1982 <- NBNH_eyes_comparison_1982(NBNH_eye_color, "hazel")
+NBNH_green_comparison1982 <- NBNH_eyes_comparison_1982(NBNH_eye_color, "green")
+NBNH_other_comparison1982 <- NBNH_eyes_comparison_1982(NBNH_eye_color, "other")
+
+NBNH_eye_comparison_table1982 <- bind_rows(NBNH_brown_comparison1982, NBNH_blue_comparison1982, NBNH_hazel_comparison1982, NBNH_green_comparison1982, NBNH_other_comparison1982)
+
+NBNH_eye_comparison_table1982
+```
+
+When isolating to just NBNH race, in 1982 the highest median income belongs to the "other" category at \$51,250, +28% vs the population median; however, excluding "other" we see that the highest median income occurs with blue eyes at \$45,263, representing an increase of about 15% vs the median.
+
+Performing an ANOVA analysis in 1982:
+
+```{r}
+
+
+NBNH_eye_color_1982 <- filter(NBNH_eye_color, year == 1982)
+
+NBNH_aov_results_1982 <- aov(income ~ simple_eyes, data = NBNH_eye_color_1982)
+summary(NBNH_aov_results_1982)
+
+
+```
+
+When stripping out other races and only looking at NBNH individuals, the relationship between eye color and income appears to be far weaker, with an F value less than 1 (meaning that more variance is explained by residuals vs eye color) and a p value of nearly 50%, meaning that the chances of this F value occurring given the null hypothesis is true is nearly equal to that of a coin flip.
+
+2012:
+
+```{r}
+
+NBNH_eyes_comparison_2012 <- function(data, eye_color) {
+  NBNH_eye_color_stats <- data %>%
+    filter(!is.na(income), year == 2012, simple_eyes == eye_color) %>%
+    summarise(
+      simple_eyes = eye_color,
+      mean_income = mean(income, na.rm = TRUE),
+      median_income = median(income, na.rm = TRUE),
+      max_income = max(income, na.rm = TRUE),
+      min_income = min(income, na.rm = TRUE)
+    )
+  
+
+  NBNH_eyes_baseline <- data %>%
+    filter(!is.na(income), year == 2012, simple_eyes != eye_color) %>%
+    summarise(
+      mean_income = mean(income, na.rm = TRUE),
+      median_income = median(income, na.rm = TRUE),
+      max_income = max(income, na.rm = TRUE),
+      min_income = min(income, na.rm = TRUE)
+    )
+  
+
+comparison <- NBNH_eye_color_stats %>%
+    mutate(
+      mean_diff_pct = (mean_income - NBNH_eyes_baseline$mean_income) / NBNH_eyes_baseline$mean_income * 100,
+      median_diff_pct = (median_income - NBNH_eyes_baseline$median_income) / NBNH_eyes_baseline$median_income * 100,
+      max_diff_pct = (max_income - NBNH_eyes_baseline$max_income) / NBNH_eyes_baseline$max_income * 100,
+      min_diff_pct = (min_income - NBNH_eyes_baseline$min_income) / NBNH_eyes_baseline$min_income * 100
+    )
+  
+  return(comparison)
+}
+
+NBNH_brown_comparison2012 <- NBNH_eyes_comparison_1982(NBNH_eye_color, "brown")
+NBNH_blue_comparison2012 <- NBNH_eyes_comparison_1982(NBNH_eye_color, "blue")
+NBNH_hazel_comparison2012 <- NBNH_eyes_comparison_1982(NBNH_eye_color, "hazel")
+NBNH_green_comparison2012 <- NBNH_eyes_comparison_1982(NBNH_eye_color, "green")
+NBNH_other_comparison2012 <- NBNH_eyes_comparison_1982(NBNH_eye_color, "other")
+
+NBNH_eye_comparison_table2012 <- bind_rows(NBNH_brown_comparison2012, NBNH_blue_comparison2012, NBNH_hazel_comparison2012, NBNH_green_comparison2012, NBNH_other_comparison2012)
+
+NBNH_eye_comparison_table2012
+
+```
+
+Again, we see the predominance of "other" eye color with the highest median income, followed by blue eyes. Blue eyes had a median income of \$45,263, +15% vs the population median. The lowest median income resided with brown-eyed individuals, at \$38,000 or -14% vs the median population.
+
+Performing an ANOVA analysis in 2012:
+
+```{r}
+
+
+NBNH_eye_color_2012 <- filter(NBNH_eye_color, year == 2012)
+
+NBNH_aov_results_2012 <- aov(income ~ simple_eyes, data = NBNH_eye_color_2012)
+summary(NBNH_aov_results_2012)
+
+
+```
+
+In 2012, it appears that the relationship between eye color and income grew stronger with an R value of 3.254 and a p value of about 1%. This is an unexpected result given that race has been effectively removed from the equation and in 1982 eye color appeared to have no impact on income...
+
+```{r}
+
+NBNH_eye_color_count_2012 <- NBNH_eye_color_2012 %>%
+  count(simple_eyes)
+
+NBNH_eye_color_count_2012 
+
+```
+
+As the distribution of eye colors in the year 2012 doesn't appear to differ markedly from other years, one can only conclude that the relationship has strengthened over time, there is yet another confounding variable, or that the year 2012 is possibly a fluke and this trend should be examined more closely over the entire intervening period and into the future to determine if this really is the case.
+
+## Hypotheses for Further Analysis
+
+Based on our findings throughout this document, we can state the following hypotheses:
+
+1.  Since 1982, Black Americans consistently experienced lower earned incomes when compared to all other racial groups.
+2.  Since 1982, the correlation between height and income has become stronger.
+3.  Eye color at first glance appears inseparable from race, and after stripping out race as a variable there appears to be no relationship between eye color and income in 1982, but some relationship between eye color and income in 2012.
